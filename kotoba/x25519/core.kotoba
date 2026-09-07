@@ -1,0 +1,176 @@
+;; x25519.core -- RFC 7748 X25519 as a pure Kotoba guest
+;; (oracle: src/x25519/core.cljc).
+;;
+;; The Montgomery ladder is product semantics: which scalar bits drive a
+;; swap, when x2/z2 and x3/z3 double or differential-add, and what a
+;; clamped scalar means. The guest owns all of it. The bytes arrive as
+;; bounded vectors (:container-items 32 -- a key is exactly 32, zero
+;; headroom, stated rather than discovered) and leave the same way.
+;;
+;; The oracle's contributory? check (all-zero output = low-order point,
+;; RFC 7748 section 6) is exported as one call, same reason as the oracle.
+;;
+;; Measured backend bounds, same as kotoba/x25519/field.kotoba:
+;; max-parameters 5, literal-only i64 shifts, no rem/mod lowering.
+;; Field arithmetic requires [x25519.field :as f] -- closed compile-time
+;; linking, not runtime require.
+;;
+;; Compile (single file, JVM-free):
+;;   kotoba compile kotoba/x25519/core.kotoba --target wasm32-browser --output core.wasm
+
+(ns x25519.core
+  (:require [x25519.field :as f])
+  (:export [clamp x25519 public-key contributory?]))
+
+(defn- at [v :document i :i64] :i64
+  (option-value-of [:option :i64]
+    (document-i64-value (option-value-of [:option :document] (document-vector-at v i) (document-i64 0)))
+    0))
+
+(defn- set-at [v :document i :i64 val :i64] :document
+  (set-at-loop v i val 0 (document-vector)))
+
+(defn- set-at-loop [v :document i :i64 val :i64 p :i64 acc :document] :document
+  (if (>= p 32)
+    acc
+    (set-at-loop v i val (+ p 1)
+                 (document-vector-conj acc
+                   (document-i64 (if (= p i) val (at v p)))))))
+
+;; --- clamp (RFC 7748 section 5, decodeScalar25519) ---------------------------
+;; Clearing the low three bits makes the scalar a cofactor multiple; bit 254
+;; set and bit 255 clear fix the ladder's length.
+
+(defn clamp [k :document] :document
+  (let [b0-cleared (set-at k 0 (bit-and (at k 0) 248))]
+    (set-at b0-cleared 31 (bit-or (bit-and (at k 31) 127) 64))))
+
+;; --- the ladder (RFC 7748 section 5, transcribed) ----------------------------
+;; State is a pair of x/z pairs. The oracle threads (x2 z2 x3 z3 swap) as
+;; loop bindings; a guest loop has max 5 parameters, so the four field
+;; elements travel as one 4-vector. swap is folded in as a fifth lane.
+
+(defn- vec-at [v :document i :i64] :document
+  (option-value-of [:option :document] (document-vector-at v i) (document-null)))
+
+(defn- ladder-step [st :document x1 :document t :i64] :document
+  (let [x2 (vec-at st 0)
+        z2 (vec-at st 1)
+        x3 (vec-at st 2)
+        z3 (vec-at st 3)
+        swap (at-vec st 4)
+        kt (bit-and (scalar-bit x1 t) 1)
+        sw (bit-xor swap kt)
+        p2 (document-vector x2 z2)
+        p3 (document-vector x3 z3)
+        s2 (f/swap (vec-at p2 0) (vec-at p2 1) sw)
+        s3 (f/swap (vec-at p3 0) (vec-at p3 1) sw)
+        x2s (vec-at s2 0)
+        z2s (vec-at s2 1)
+        x3s (vec-at s3 0)
+        z3s (vec-at s3 1)
+        a (f/add x2s z2s)
+        aa (f/square a)
+        b (f/sub x2s z2s)
+        bb (f/square b)
+        e (f/sub aa bb)
+        c (f/add x3s z3s)
+        d (f/sub x3s z3s)
+        da (f/mul d a)
+        cb (f/mul c b)
+        x3n (f/square (f/add da cb))
+        z3n (f/mul x1 (f/square (f/sub da cb)))
+        x2n (f/mul aa bb)
+        z2n (f/mul e (f/add aa (f/mul (a24) e)))]
+    (document-vector x2n z2n x3n z3n (document-i64 kt))))
+
+(defn- at-vec [v :document i :i64] :i64
+  (option-value-of [:option :i64]
+    (document-i64-value (option-value-of [:option :document] (document-vector-at v i) (document-i64 0)))
+    0))
+
+;; scalar-bit: bit (t mod 8) of byte (t div 8). i64 shift counts must be
+;; literals (measured), so the variable shift becomes a case tree over the
+;; eight positions.
+
+(defn- byte-shift [byte :i64 pos :i64] :i64
+  (if (= pos 0) (i64-shift-right byte 0)
+      (if (= pos 1) (i64-shift-right byte 1)
+          (if (= pos 2) (i64-shift-right byte 2)
+              (if (= pos 3) (i64-shift-right byte 3)
+                  (if (= pos 4) (i64-shift-right byte 4)
+                      (if (= pos 5) (i64-shift-right byte 5)
+                          (if (= pos 6) (i64-shift-right byte 6)
+                              (i64-shift-right byte 7)))))))))
+
+(defn- scalar-bit [k :document t :i64] :i64
+  (byte-shift (at k (quot t 8)) (rem-8 t)))
+
+(defn- rem-8 [x :i64] :i64
+  (- x (* 8 (quot x 8))))
+
+;; the ladder constant: 121665 = (a - 2) / 4 for a = 486662
+(defn- a24 [] :document
+  (f/of (document-vector (document-i64 121665)
+                         (document-i64 0) (document-i64 0) (document-i64 0)
+                         (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+                         (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+                         (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0))))
+
+(defn- ladder-loop [st :document x1 :document t :i64] :document
+  (if (< t 0)
+    st
+    (ladder-loop (ladder-step st x1 t) x1 (- t 1))))
+
+(defn- final-x [st :document] :document
+  (let [sw (at-vec st 4)
+        s (f/swap (vec-at st 0) (vec-at st 2) sw)]
+    (f/mul (vec-at s 0) (f/invert (vec-at st 3)))))
+
+;; --- entry points ------------------------------------------------------------
+
+(defn- bad-length [n :i64] :document
+  (document-map
+   :status (document-keyword :error)
+   :reason (document-keyword :bad-length)
+   :length (document-i64 n)))
+
+(defn x25519 [scalar :document u :document] :document
+  (let [clamped (clamp scalar)
+        x1 (f/unpack u)
+        st0 (document-vector
+             (f/one) (f/zero)
+             (f/copy x1) (f/one)
+             (document-i64 0))
+        st (ladder-loop st0 x1 254)
+        shared (final-x st)]
+    (document-map
+     :status (document-keyword :ok)
+     :bytes (f/pack shared))))
+
+(defn- base-point [] :document
+  (document-vector
+   (document-i64 9)
+   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+   (document-i64 0) (document-i64 0)))
+
+(defn public-key [scalar :document] :document
+  (x25519 scalar (base-point)))
+
+(defn- zero-loop [shared :document i :i64] :bool
+  (if (>= i 32)
+    true
+    (if (= (at shared i) 0)
+      (zero-loop shared (+ i 1))
+      false)))
+
+(defn contributory? [shared :document] :bool
+  (if (zero-loop shared 0)
+    false
+    true))
