@@ -1,0 +1,276 @@
+;; x25519.field -- GF(2^255-19) arithmetic as a pure Kotoba guest
+;; (oracle: this repo, src/x25519/field.cljc).
+;;
+;; A field element is a document vector of 16 limbs (i64 each), the
+;; TweetNaCl shape the oracle gives for the same reason: no big integer
+;; exists that both runtimes name, and every intermediate of the schoolbook
+;; product stays under 2^53. The guest holds the same 16 slots as
+;; :document limbs; :container-items is 32 (measured) and 16 fits.
+;;
+;; Bounds measured on amu and stated where they shaped the guest:
+;;   max-parameters 5   -- of takes limbs as one vector; loops carry
+;;                         (state, index, one argument) at most
+;;   i64 shift counts   -- must be integer literals in [0,63]
+;;   rem / mod          -- no admitted lowering; spelled quot-and-subtract
+;;
+;; The oracle's in-place wr/swap!* have no guest reading -- a :document is
+;; immutable -- so writes are new vectors (set-limb / swap).
+;;
+;; Compile (single file, JVM-free):
+;;   kotoba compile kotoba/x25519/field.kotoba --target wasm32-browser --output field.wasm
+
+(ns x25519.field
+  (:export [one zero copy rd set-limb of add sub carry mul square
+            is-negative invert swap unpack pack]))
+
+;; --- element access ---------------------------------------------------------
+
+(defn- at [v :document i :i64] :document
+  (option-value-of [:option :document] (document-vector-at v i) (document-i64 0)))
+
+(defn rd [a :document i :i64] :i64
+  (option-value-of [:option :i64] (document-i64-value (at a i)) 0))
+
+;; --- constructors -----------------------------------------------------------
+
+(defn zero [] :document
+  (document-vector (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)))
+
+(defn one [] :document
+  (document-vector (document-i64 1) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)))
+
+(defn copy [a :document] :document
+  (document-vector (document-i64 (rd a 0)) (document-i64 (rd a 1)) (document-i64 (rd a 2)) (document-i64 (rd a 3)) (document-i64 (rd a 4)) (document-i64 (rd a 5)) (document-i64 (rd a 6)) (document-i64 (rd a 7)) (document-i64 (rd a 8)) (document-i64 (rd a 9)) (document-i64 (rd a 10)) (document-i64 (rd a 11)) (document-i64 (rd a 12)) (document-i64 (rd a 13)) (document-i64 (rd a 14)) (document-i64 (rd a 15))))
+
+(defn- of-limb [xs :document p :i64] :i64
+  (option-value-of [:option :i64]
+    (document-i64-value (option-value-of [:option :document] (document-vector-at xs p) (document-null)))
+    0))
+
+(defn- of-loop [xs :document acc :document p :i64] :document
+  (if (>= p 16)
+    acc
+    (of-loop xs (document-vector-conj acc (document-i64 (of-limb xs p))) (+ p 1))))
+
+(defn of [xs :document] :document
+  (of-loop xs (document-vector) 0))
+
+(defn- set-at [a :document i :i64 v :i64 p :i64 acc :document] :document
+  (if (>= p 16)
+    acc
+    (set-at a i v (+ p 1)
+            (document-vector-conj acc (document-i64 (if (= p i) v (rd a p)))))))
+
+(defn set-limb [a :document i :i64 v :i64] :document
+  (set-at a i v 0 (document-vector)))
+
+;; --- limbwise add / sub (no carry; callers carry) ----------------------------
+
+(defn add [a :document b :document] :document
+  (document-vector (document-i64 (+ (rd a 0) (rd b 0))) (document-i64 (+ (rd a 1) (rd b 1))) (document-i64 (+ (rd a 2) (rd b 2))) (document-i64 (+ (rd a 3) (rd b 3))) (document-i64 (+ (rd a 4) (rd b 4))) (document-i64 (+ (rd a 5) (rd b 5))) (document-i64 (+ (rd a 6) (rd b 6))) (document-i64 (+ (rd a 7) (rd b 7))) (document-i64 (+ (rd a 8) (rd b 8))) (document-i64 (+ (rd a 9) (rd b 9))) (document-i64 (+ (rd a 10) (rd b 10))) (document-i64 (+ (rd a 11) (rd b 11))) (document-i64 (+ (rd a 12) (rd b 12))) (document-i64 (+ (rd a 13) (rd b 13))) (document-i64 (+ (rd a 14) (rd b 14))) (document-i64 (+ (rd a 15) (rd b 15)))))
+
+(defn sub [a :document b :document] :document
+  (document-vector (document-i64 (- (rd a 0) (rd b 0))) (document-i64 (- (rd a 1) (rd b 1))) (document-i64 (- (rd a 2) (rd b 2))) (document-i64 (- (rd a 3) (rd b 3))) (document-i64 (- (rd a 4) (rd b 4))) (document-i64 (- (rd a 5) (rd b 5))) (document-i64 (- (rd a 6) (rd b 6))) (document-i64 (- (rd a 7) (rd b 7))) (document-i64 (- (rd a 8) (rd b 8))) (document-i64 (- (rd a 9) (rd b 9))) (document-i64 (- (rd a 10) (rd b 10))) (document-i64 (- (rd a 11) (rd b 11))) (document-i64 (- (rd a 12) (rd b 12))) (document-i64 (- (rd a 13) (rd b 13))) (document-i64 (- (rd a 14) (rd b 14))) (document-i64 (- (rd a 15) (rd b 15)))))
+
+;; --- floor division and carry ------------------------------------------------
+
+(defn is-neg [x :i64] :bool
+  (< x 0))
+
+(defn- floor-div-65536 [x :i64] :i64
+  (let [q (quot x 65536)
+        r (- x (* 65536 q))]
+    (if (if (is-neg x) (not= r 0) false)
+      (- q 1)
+      q)))
+
+(defn carry [o :document] :document
+  (carry-loop o 0))
+
+(defn- carry-loop [o :document i :i64] :document
+  (if (>= i 16)
+    o
+    (let [c (floor-div-65536 (rd o i))
+          stripped (- (rd o i) (* c 65536))]
+      (if (< i 15)
+        (carry-loop (set-limb (set-limb o i stripped) (+ i 1) (+ (rd o (+ i 1)) c)) (+ i 1))
+        (carry-loop (set-limb o 0 (+ (rd o 0) (* 38 c))) (+ i 1))))))
+
+;; --- schoolbook multiplication ----------------------------------------------
+;; The oracle's exact shape: a 31-slot product vector t, limb 16+i folded
+;; back with weight 38 (2^256 = 38 in this field), then carried twice --
+;; the first pass can push limb 0 back over 2^16.
+
+(defn- fold38 [t :document p :i64] :document
+  (if (>= p 16)
+    t
+    (fold38 (set-limb t p (+ (rd t p) (* 38 (rd t (+ p 16))))) (+ p 1))))
+
+(defn- zero31 [] :document
+  (document-vector (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+                   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+                   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+                   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+                   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+                   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+                   (document-i64 0) (document-i64 0) (document-i64 0) (document-i64 0)
+                   (document-i64 0) (document-i64 0) (document-i64 0)))
+
+(defn- t-add [t :document k :i64 v :i64] :document
+  (set-limb t k (+ (rd t k) v)))
+
+(defn- mul-outer [a :document b :document i :i64 t :document] :document
+  (if (>= i 16)
+    t
+    (mul-outer a b (+ i 1) (mul-inner a b i 0 t))))
+
+(defn- mul-inner [a :document b :document i :i64 j :i64 t :document] :document
+  (if (>= j 16)
+    t
+    (mul-inner a b i (+ j 1) (t-add t (+ i j) (* (rd a i) (rd b j))))))
+
+(defn mul [a :document b :document] :document
+  (let [t (mul-outer a b 0 (zero31))
+        folded (fold38 t 0)]
+    (carry (carry (first-16 folded)))))
+
+(defn- first-16 [t :document] :document
+  (document-vector (document-i64 (rd t 0)) (document-i64 (rd t 1)) (document-i64 (rd t 2)) (document-i64 (rd t 3))
+                   (document-i64 (rd t 4)) (document-i64 (rd t 5)) (document-i64 (rd t 6)) (document-i64 (rd t 7))
+                   (document-i64 (rd t 8)) (document-i64 (rd t 9)) (document-i64 (rd t 10)) (document-i64 (rd t 11))
+                   (document-i64 (rd t 12)) (document-i64 (rd t 13)) (document-i64 (rd t 14)) (document-i64 (rd t 15))))
+
+(defn square [a :document] :document
+  (mul a a))
+
+(defn is-negative [a :document] :bool
+  (is-neg (rd a 0)))
+
+;; --- invert -----------------------------------------------------------------
+;; a^(p-2) = a^-1, by square-and-multiply over the fixed exponent 2^255-21.
+;; Bits 2 and 4 are the only zeros: the loop skips exactly those two
+;; multiplications, verbatim from the oracle.
+
+(defn- inv-step [c :document a :document i :i64] :document
+  (let [sqd (square c)]
+    (if (if (= i 2) true (= i 4))
+      sqd
+      (mul sqd a))))
+
+(defn- inv-loop [c :document a :document i :i64] :document
+  (if (< i 0)
+    c
+    (inv-loop (inv-step c a i) a (- i 1))))
+
+(defn invert [a :document] :document
+  (inv-loop (copy a) a 253))
+
+;; --- conditional swap -------------------------------------------------------
+;; Exchange p and q when b is 1, by arithmetic mask -- the same mask the
+;; oracle uses, over immutable vectors instead of in-place writes.
+
+(defn- masked-xor [p :document q :document mask :i64 i :i64] :i64
+  (bit-xor (rd p i) (bit-and mask (bit-xor (rd p i) (rd q i)))))
+
+(defn- swap-p [p :document q :document mask :i64 i :i64] :document
+  (if (>= i 16)
+    p
+    (swap-p (set-limb p i (masked-xor p q mask i)) q mask (+ i 1))))
+
+(defn- swap-q [p :document q :document mask :i64 i :i64] :document
+  (if (>= i 16)
+    q
+    (swap-q p (set-limb q i (bit-xor (rd q i) (bit-and mask (bit-xor (rd p i) (rd q i))))) mask (+ i 1))))
+
+(defn swap [p :document q :document b :i64] :document
+  (let [mask (- 0 b)]
+    (document-vector
+     (swap-p p q mask 0)
+     (swap-q p q mask 0))))
+
+;; --- unpack / pack ----------------------------------------------------------
+(defn- unpack-limb [bs :document i :i64] :i64
+  (let [lo (option-value-of [:option :i64]
+             (document-i64-value (option-value-of [:option :document] (document-vector-at bs (* 2 i)) (document-i64 0))) 0)
+        hi (option-value-of [:option :i64]
+             (document-i64-value (option-value-of [:option :document] (document-vector-at bs (+ 1 (* 2 i))) (document-i64 0))) 0)]
+    (+ lo (* 256 hi))))
+
+(defn- unpack-loop [bs :document i :i64 acc :document] :document
+  (if (>= i 16)
+    acc
+    (unpack-loop bs (+ i 1)
+                 (document-vector-conj acc
+                   (document-i64 (if (= i 15)
+                                   (bit-and (unpack-limb bs 15) 32767)
+                                   (unpack-limb bs i)))))))
+
+(defn unpack [bs :document] :document
+  (unpack-loop bs 0 (document-vector)))
+
+;; pack: fully reduced 32 bytes. Two subtraction rounds make the output
+;; canonical -- after carrying, a value can still be in [p, 2^255), and two
+;; limb vectors for the same element must encode identically.
+
+(defn- rem-65536 [x :i64] :i64
+  (- x (* 65536 (quot x 65536))))
+
+(defn- sub-round [t :document round :i64] :document
+  (let [m0 (- (rd t 0) 65517)
+        m1 (- (rd t 1) 65535 (if (is-neg m0) 1 0))
+        m2 (- (rd t 2) 65535 (if (is-neg m1) 1 0))
+        m3 (- (rd t 3) 65535 (if (is-neg m2) 1 0))
+        m4 (- (rd t 4) 65535 (if (is-neg m3) 1 0))
+        m5 (- (rd t 5) 65535 (if (is-neg m4) 1 0))
+        m6 (- (rd t 6) 65535 (if (is-neg m5) 1 0))
+        m7 (- (rd t 7) 65535 (if (is-neg m6) 1 0))
+        m8 (- (rd t 8) 65535 (if (is-neg m7) 1 0))
+        m9 (- (rd t 9) 65535 (if (is-neg m8) 1 0))
+        m10 (- (rd t 10) 65535 (if (is-neg m9) 1 0))
+        m11 (- (rd t 11) 65535 (if (is-neg m10) 1 0))
+        m12 (- (rd t 12) 65535 (if (is-neg m11) 1 0))
+        m13 (- (rd t 13) 65535 (if (is-neg m12) 1 0))
+        m14 (- (rd t 14) 65535 (if (is-neg m13) 1 0))
+        m15 (- (rd t 15) 32767 (if (is-neg m14) 1 0))
+        borrow (if (is-neg m15) 1 0)
+        ;; normalised limbs
+        n0 (rem-65536 m0)
+        n1 (rem-65536 m1)
+        n2 (rem-65536 m2)
+        n3 (rem-65536 m3)
+        n4 (rem-65536 m4)
+        n5 (rem-65536 m5)
+        n6 (rem-65536 m6)
+        n7 (rem-65536 m7)
+        n8 (rem-65536 m8)
+        n9 (rem-65536 m9)
+        n10 (rem-65536 m10)
+        n11 (rem-65536 m11)
+        n12 (rem-65536 m12)
+        n13 (rem-65536 m13)
+        n14 (rem-65536 m14)
+        n15 m15
+        ;; no borrow means t was at least p: m is canonical and replaces it
+        mask (- 0 (- 1 borrow))
+        m-vec (document-vector (document-i64 n0) (document-i64 n1) (document-i64 n2) (document-i64 n3)
+                               (document-i64 n4) (document-i64 n5) (document-i64 n6) (document-i64 n7)
+                               (document-i64 n8) (document-i64 n9) (document-i64 n10) (document-i64 n11)
+                               (document-i64 n12) (document-i64 n13) (document-i64 n14) (document-i64 n15))
+        swapped (swap t m-vec mask)]
+    (if (= round 0)
+      (sub-round swapped 1)
+      swapped)))
+
+(defn- pack-bytes [t :document i :i64 acc :document] :document
+  (if (>= i 16)
+    acc
+    (let [limb (rd t i)]
+      (pack-bytes t (+ i 1)
+                  (document-vector-conj
+                   (document-vector-conj acc
+                     (document-i64 (bit-and limb 255)))
+                   (document-i64 (bit-and (quot limb 256) 255)))))))
+
+(defn pack [a :document] :document
+  (let [t (carry (carry (carry a)))]
+    (pack-bytes (sub-round t 0) 0 (document-vector))))
