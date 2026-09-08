@@ -27,6 +27,33 @@ Compiling `core.kotoba` takes about four minutes, nearly all of it the
 compile-time oracle actually running a 255-step scalar multiplication. What it
 seals is `main`'s answer, and it is 0.
 
+## In-place update, and what it is worth
+
+Every loop here that fills an accumulator writes with `vector-assoc!`, and
+the bang is earned rather than asserted: the accumulator is returned, and
+`module-linear-returning` (kotoba-sema a2ee65ac) checks that every caller
+hands it over. Before that check existed a returned handle was an escape, so
+all of these copied.
+
+Measured on aarch64 under kexe_loader, same programs, same answers:
+
+| | handles | arena items |
+|---|---|---|
+| field self-check, copying | 2,012 | 46,176 |
+| field self-check, in place | **1,244** | **23,648** |
+| X25519 ladder, copying | 1,165,132 | 31,933,313 |
+| X25519 ladder, one bang in `mul-inner` | 382,540 | 7,672,961 |
+| X25519 ladder, every accumulator loop | **300,908** | **6,366,337** |
+
+What is left is `carry`, and the reason it still copies is precise rather
+than incidental. It reads limb `i`, computes a carry from it, and writes limb
+`i` and limb `i+1`. `fused-rmw?` admits a read and a write at the SAME index
+inside ONE expression; hoisting the read into a `let` so the carry can be
+computed from it makes it a second use of the handle. Admitting that shape --
+a let-bound read of `v` at `k` whose only other mention of `v` is a write at
+`k` in the let's body -- is the same soundness argument with the binding in
+between, and it is the next thing worth doing.
+
 ## What runs where, measured 2026-09-08
 
 | | KIR oracle | wasm32 host | native aarch64 |

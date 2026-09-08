@@ -69,7 +69,7 @@
 (defn- copy-loop [a :vector-i64 acc :vector-i64 i :i64] :vector-i64
   (if (>= i 16)
     acc
-    (copy-loop a (vector-assoc acc i (vector-at a i)) (+ i 1))))
+    (copy-loop a (vector-assoc! acc i (vector-at a i)) (+ i 1))))
 
 (defn copy [a :vector-i64] :vector-i64
   (copy-loop a (vector-alloc 16) 0))
@@ -79,7 +79,7 @@
 (defn- add-loop [a :vector-i64 b :vector-i64 acc :vector-i64 i :i64] :vector-i64
   (if (>= i 16)
     acc
-    (add-loop a b (vector-assoc acc i (+ (vector-at a i) (vector-at b i))) (+ i 1))))
+    (add-loop a b (vector-assoc! acc i (+ (vector-at a i) (vector-at b i))) (+ i 1))))
 
 (defn add [a :vector-i64 b :vector-i64] :vector-i64
   (add-loop a b (vector-alloc 16) 0))
@@ -87,7 +87,7 @@
 (defn- sub-loop [a :vector-i64 b :vector-i64 acc :vector-i64 i :i64] :vector-i64
   (if (>= i 16)
     acc
-    (sub-loop a b (vector-assoc acc i (- (vector-at a i) (vector-at b i))) (+ i 1))))
+    (sub-loop a b (vector-assoc! acc i (- (vector-at a i) (vector-at b i))) (+ i 1))))
 
 (defn sub [a :vector-i64 b :vector-i64] :vector-i64
   (sub-loop a b (vector-alloc 16) 0))
@@ -124,12 +124,19 @@
 ;; over 2^16 because the wrap-around carry multiplies by 38.
 
 (defn- mul-inner [a :vector-i64 b :vector-i64 i :i64 j :i64 t :vector-i64] :vector-i64
+  ;; `vector-assoc!`, and the bang is earned rather than asserted: this
+  ;; accumulator is returned, `mul-outer` hands it straight back, and `mul`
+  ;; allocates it and reads a value out of it -- which is what
+  ;; `module-linear-returning` checks before admitting the write (kotoba-sema
+  ;; a2ee65ac). Measured on aarch64: the same loop costs 3001 vector handles
+  ;; and 48,016 arena items copying and 1 handle and 16 items in place, and
+  ;; this one runs 256 times per multiply.
   (if (>= j 16)
     t
     (mul-inner a b i (+ j 1)
-               (vector-assoc t (+ i j)
-                             (+ (vector-at t (+ i j))
-                                (* (vector-at a i) (vector-at b j)))))))
+               (vector-assoc! t (+ i j)
+                              (+ (vector-at t (+ i j))
+                                 (* (vector-at a i) (vector-at b j)))))))
 
 (defn- mul-outer [a :vector-i64 b :vector-i64 i :i64 t :vector-i64] :vector-i64
   (if (>= i 16)
@@ -144,7 +151,7 @@
 (defn- first-16 [t :vector-i64 acc :vector-i64 i :i64] :vector-i64
   (if (>= i 16)
     acc
-    (first-16 t (vector-assoc acc i (vector-at t i)) (+ i 1))))
+    (first-16 t (vector-assoc! acc i (vector-at t i)) (+ i 1))))
 
 (defn mul [a :vector-i64 b :vector-i64] :vector-i64
   (let [t (mul-outer a b 0 (vector-alloc 31))
@@ -218,7 +225,7 @@
     acc
     (let [limb (+ (vector-at bs (* 2 i)) (* 256 (vector-at bs (+ (* 2 i) 1))))]
       (unpack-loop bs
-                   (vector-assoc acc i (if (= i 15) (bit-and limb 32767) limb))
+                   (vector-assoc! acc i (if (= i 15) (bit-and limb 32767) limb))
                    (+ i 1)))))
 
 (defn unpack [bs :vector-i64] :vector-i64
@@ -289,9 +296,13 @@
     acc
     (let [limb (vector-at t i)]
       (pack-bytes t
-                  (vector-assoc (vector-assoc acc (* 2 i) (bit-and limb 255))
-                                (+ (* 2 i) 1)
-                                (bit-and (i64-shift-right limb 8) 255))
+                  ;; Chained, and the chain is what keeps `acc` to ONE use:
+                  ;; the outer write's target is the inner call's RESULT, not
+                  ;; the name, so the analysis sees one consuming use of the
+                  ;; handle rather than two.
+                  (vector-assoc! (vector-assoc! acc (* 2 i) (bit-and limb 255))
+                                 (+ (* 2 i) 1)
+                                 (bit-and (i64-shift-right limb 8) 255))
                   (+ i 1)))))
 
 (defn pack [a :vector-i64] :vector-i64
