@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; Run the suite on the ClojureScript side.
 ;;
 ;; Not a formality. The field is a `long-array` on the JVM and a
@@ -7,7 +7,7 @@
 ;; at 2^53. Every product and carry in `x25519.field` is sized to stay under
 ;; the smaller of those, and this is what checks that it does.
 ;;
-;;   nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljk
+;;   kbb --backend sci --classpath "$(kbb -A:cljs -Spath)" scripts/verify-cljs.cljk
 (ns verify-cljs
   (:require [clojure.test :as t]
             [x25519.core-test]))

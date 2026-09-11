@@ -46,9 +46,9 @@ against. About 76 ms per scalar multiplication on the JVM, against roughly
 ## Verify
 
 ```sh
-clojure -M:test                                                        # JVM
-nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljk   # ClojureScript
-clojure -M:oracle                                                      # + differential vs BouncyCastle
+kbb -M:test                                                        # JVM
+kbb --backend sci --classpath "$(kbb -A:cljs -Spath)" scripts/verify-cljs.cljk   # ClojureScript
+kbb -M:oracle                                                      # + differential vs BouncyCastle
 ```
 
 **Known answers**: RFC 7748 §5.2 and §6.1 verbatim, the one-round and
@@ -57,7 +57,7 @@ low-order u. **Every one was reproduced with BouncyCastle 1.78.1
 (`org.bouncycastle.math.ec.rfc7748.X25519`) before this implementation was
 written** — the oracle existed before the code rather than being fitted to it.
 
-**Differential**: `clojure -M:oracle` runs 40 comparisons against
+**Differential**: `kbb -M:oracle` runs 40 comparisons against
 BouncyCastle over a fixed LCG spread, plus 20 on the base point, plus the
 thousand-round vector — which lives there rather than in the fast suite
 because at 76 ms a multiplication it is over a minute. BouncyCastle is scoped
