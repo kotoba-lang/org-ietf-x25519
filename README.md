@@ -47,7 +47,7 @@ against. About 76 ms per scalar multiplication on the JVM, against roughly
 
 ```sh
 clojure -M:test                                                        # JVM
-nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljs   # ClojureScript
+nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljk   # ClojureScript
 clojure -M:oracle                                                      # + differential vs BouncyCastle
 ```
 

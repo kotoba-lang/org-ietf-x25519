@@ -7,7 +7,7 @@
 ;; at 2^53. Every product and carry in `x25519.field` is sized to stay under
 ;; the smaller of those, and this is what checks that it does.
 ;;
-;;   nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljs
+;;   nbb --classpath "$(clojure -A:cljs -Spath)" scripts/verify-cljs.cljk
 (ns verify-cljs
   (:require [clojure.test :as t]
             [x25519.core-test]))

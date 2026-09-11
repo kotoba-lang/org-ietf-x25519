@@ -1,5 +1,5 @@
 ;; x25519.core -- RFC 7748 X25519 as a pure Kotoba guest
-;; (oracle: src/x25519/core.cljc).
+;; (oracle: src/x25519/core.cljk).
 ;;
 ;; The Montgomery ladder is product semantics: which scalar bits drive a swap,
 ;; when x2/z2 and x3/z3 double or differential-add, and what a clamped scalar
