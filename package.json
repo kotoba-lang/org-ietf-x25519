@@ -3,6 +3,6 @@
   "private": true,
   "description": "RFC 7748 X25519 in portable .cljc",
   "scripts": {
-    "test:cljs": "nbb --classpath \"$(clojure -A:cljs -Spath)\" scripts/verify-cljs.cljs"
+    "test:cljs": "nbb --classpath \"$(clojure -A:cljs -Spath)\" scripts/verify-cljs.cljk"
   }
 }

@@ -1,5 +1,5 @@
 ;; x25519.field -- GF(2^255-19) arithmetic as a pure Kotoba guest
-;; (oracle: this repo, src/x25519/field.cljc).
+;; (oracle: this repo, src/x25519/field.cljk).
 ;;
 ;; A field element is a :vector-i64 of 16 limbs of 16 bits -- the TweetNaCl
 ;; shape the oracle gives for the same reason: no big integer exists that both
@@ -309,7 +309,7 @@
   (pack-bytes (sub-round (carry (carry (carry a))) 0) (vector-alloc 32) 0))
 
 ;; --- self-check --------------------------------------------------------------
-;; Known answers from the oracle (src/x25519/field.cljc), taken by running it:
+;; Known answers from the oracle (src/x25519/field.cljk), taken by running it:
 ;;   a = unpack [0 1 2 ... 31]      b = unpack [255 254 ... 224]
 ;; `main` returns the NUMBER of disagreeing bytes, not a boolean: a count
 ;; distinguishes one regression from a build that answers nothing right.
